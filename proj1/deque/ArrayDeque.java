@@ -2,13 +2,13 @@ package deque;
 
 import java.util.Iterator;
 
-public class ArrayDeque<T> implements Deque<T>, Iterable<T>{
+public class ArrayDeque<T> implements Deque<T>, Iterable<T> {
     int N = 8;
     double k = 2, p = 0.25, q = 0.5;
     public T[] a;
     int frt, lst, siz;
-    public ArrayDeque(){
-        a = (T[])new Object[8];
+    public ArrayDeque() {
+        a = (T[]) new Object[8];
         frt = 0; lst = 1; siz = 0;
     }
 
@@ -25,14 +25,14 @@ public class ArrayDeque<T> implements Deque<T>, Iterable<T>{
     }
     private void ShrinkArray(){
         T[] aNew = (T[])new Object[(int) (N * q)];
-        for(int i= 1, p = FindNxt(frt); p != lst; i++, p = FindNxt(p)) {
+        for(int i = 1, p = FindNxt(frt); p != lst; i++, p = FindNxt(p)) {
             aNew[i] = a[p];
         }
         a = aNew; N = (int) (N * q);
-        frt = 0; lst= siz + 1;
+        frt = 0; lst = siz + 1;
     }
     private int FindPre(int x){
-        if(x > 0)return x - 1;
+        if (x > 0) return x - 1;
         else return N-1;
     }
     private int FindNxt(int x){
@@ -92,7 +92,7 @@ public class ArrayDeque<T> implements Deque<T>, Iterable<T>{
     public T get(int index) {
         if(index > siz)return null;
         int p = FindNxt(frt);
-        while(index != 0){p = FindNxt(p); index--;}
+        while(index != 0){ p = FindNxt(p); index--; }
         return a[p];
     }
 

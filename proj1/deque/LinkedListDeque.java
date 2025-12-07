@@ -48,7 +48,7 @@ public class LinkedListDeque<T> implements Iterable<T>, Deque<T> {
             frt.pre = cur; cur.nxt = frt;
             frt = cur;
         }
-        siz ++;
+        siz++;
     }
 
     public void addLast(T item) {
