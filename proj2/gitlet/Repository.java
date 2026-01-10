@@ -6,6 +6,7 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 
 import static gitlet.Utils.*;
+import static gitlet.Utils.readContentsAsString;
 
 // TODO: any imports you need here
 
@@ -44,7 +45,31 @@ public class Repository {
         return formatter.format(date);
     }
 
-    public static void Init() {
+    private static File getHeadBranchFile(){
+        String headID = readContentsAsString(HEAD_FILE);
+        File branchFile = join(HEADS_FOLDER, headID);
+        return branchFile;
+    }
+
+    private static String getHeadCommitID(){
+        File branchFile = getHeadBranchFile();
+        String headCommitID = readContentsAsString(branchFile);
+        return headCommitID;
+    }
+
+    private static Commit getHeadCommit(){
+        String headCommitID = getHeadCommitID();
+        Commit headCommit = Commit.fromFile(headCommitID);
+        return headCommit;
+    }
+
+    private static String getCommitID(String branchID) {
+        File branchFile = join(HEADS_FOLDER, branchID);
+        String commitID = readContentsAsString(branchFile);
+        return commitID;
+    }
+
+    public static void init() {
         if(GITLET_DIR.exists()){
             System.out.println("A Gitlet version-control system already exists in the current directory.");
             System.exit(0);
@@ -53,10 +78,9 @@ public class Repository {
         GITLET_DIR.mkdir();
         OBJECTS_FOLDER.mkdir();
         HEADS_FOLDER.mkdir();
-        Utils.writeContents(HEAD_FILE, "");
 
         String initTimestamp = formatDate(new Date(0));
-        Commit initCommit = new Commit("initial commit", initTimestamp, null, new HashMap<>());
+        Commit initCommit = new Commit("initial commit", initTimestamp, null, null, new HashMap<>());
 
         String commitID = initCommit.saveCommit();
 
@@ -68,25 +92,7 @@ public class Repository {
         writeObject(STAGE_FILE, new Stage());
     }
 
-    private static File getbranchFile(){
-        String headID = readContentsAsString(HEAD_FILE);
-        File branchFile = join(HEADS_FOLDER, headID);
-        return branchFile;
-    }
-
-    private static String getHeadCommitID(){
-        File branchFile = getbranchFile();
-        String headCommitID = readContentsAsString(branchFile);
-        return headCommitID;
-    }
-
-    private static Commit getHeadCommit(){
-        String headCommitID = getHeadCommitID();
-        Commit headCommit = Commit.fromFile(headCommitID);
-        return headCommit;
-    }
-
-    public static void Add(String name) {
+    public static void add(String name) {
         File fileToAdd = join(CWD, name);
         if(!fileToAdd.exists()){
             System.out.println("File does not exist.");
@@ -99,15 +105,16 @@ public class Repository {
         Commit headCommit = getHeadCommit();
 
         Stage stage = readObject(STAGE_FILE, Stage.class);
+        if(stage.removed.contains(name)) {
+            stage.removed.remove(name);
+        }
 
         if(Objects.equals(headCommit.fileBlobTable.get(name), blobID)) {
-            if(stage.removed.contains(name)) {
-                stage.removed.remove(name);
+            if(stage.added.containsKey(name)) {
+                stage.added.remove(name);
             }
-
-            stage.added.remove(name);
         } else {
-            stageMap.put(name, blobID);
+            stage.added.put(name, blobID);
 
             File newBlob = join(OBJECTS_FOLDER, blobID);
             if(!newBlob.exists()) {
@@ -115,13 +122,18 @@ public class Repository {
             }
         }
 
-        writeObject(STAGE_FILE, (Serializable) stageMap);
+        writeObject(STAGE_FILE, (Serializable) stage);
     }
 
-    public static void Commit(String message) {
-        Map<String, String> stageMap = readObject(STAGE_FILE, HashMap.class);
+    public static void commit(String message) {
+        if(message == null || message.isEmpty()) {
+            System.out.println("Please enter a commit message.");
+            System.exit(0);
+        }
 
-        if(stageMap.isEmpty()){
+        Stage stage = readObject(STAGE_FILE, Stage.class);
+
+        if(stage.added.isEmpty() && stage.removed.isEmpty()){
             System.out.println("No changes added to the commit.");
             System.exit(0);
         }
@@ -129,34 +141,441 @@ public class Repository {
         Commit parentCommit = getHeadCommit();
         Map<String, String> newFileBlobTable = new HashMap<>(parentCommit.fileBlobTable);
 
-        for(String name : stageMap.keySet()){
-            String blobID = stageMap.get(name);
+        for(String name : stage.added.keySet()){
+            String blobID = stage.added.get(name);
             newFileBlobTable.put(name, blobID);
         }
-        writeObject(STAGE_FILE, new HashMap<String, String>());
+        for(String name : stage.removed){
+            newFileBlobTable.remove(name);
+        }
+        writeObject(STAGE_FILE, new Stage());
 
         String timeStamp = formatDate(new Date());
-        Commit headCommit = new Commit(message, timeStamp, getHeadCommitID(), newFileBlobTable);
+        Commit headCommit = new Commit(message, timeStamp, getHeadCommitID(), null, newFileBlobTable);
 
         String headCommitID = headCommit.saveCommit();
-        File brachFile = getbranchFile();
+        File headBrachFile = getHeadBranchFile();
 
-        writeContents(brachFile, headCommitID);
+        writeContents(headBrachFile, headCommitID);
     }
 
-    public static void Log() {
+    public static void log() {
         String curCommitID = getHeadCommitID();
 
         while(true) {
             Commit curCommit = Commit.fromFile(curCommitID);
             System.out.println("===");
             System.out.println("commit " + curCommitID);
+            if(curCommit.parent != null && curCommit.mergeParent != null) {
+                System.out.println("Merge: " + curCommit.parent.substring(0, 7) + " " + curCommit.mergeParent.substring(0, 7));
+            }
             System.out.println("Date: " + curCommit.commitTime);
             System.out.println(curCommit.logMessage);
             System.out.println();
 
-            if(curCommit.parentRef == null) break;
-            else curCommitID = curCommit.parentRef;
+            if(curCommit.parent == null) break;
+            else curCommitID = curCommit.parent;
         }
+    }
+
+    private static void writeBlobToCWD(Commit commit, String name) {
+        if(!commit.fileBlobTable.containsKey(name)) {
+            System.out.println("File does not exist in that commit.");
+            System.exit(0);
+        }
+
+        String blobID = commit.fileBlobTable.get(name);
+        File blob = join(OBJECTS_FOLDER, blobID);
+
+        byte[] content = readContents(blob);
+        File file = join(CWD, name);
+        writeContents(file, content);
+    }
+
+    public static void checkoutFile(String name) {
+        Commit headCommit = getHeadCommit();
+        writeBlobToCWD(headCommit, name);
+    }
+
+    private static String getFullID(String shortID) {
+        if(shortID.length() == 40) return shortID;
+        List<String> objectIDs = plainFilenamesIn(OBJECTS_FOLDER);
+        for(String fullID : objectIDs) {
+            if(fullID.startsWith(shortID)) return fullID;
+        }
+        return null;
+    }
+
+    public static void checkoutCommitFile(String commitID, String name) {
+        commitID = getFullID(commitID);
+        if(commitID == null) {
+            System.out.println("No commit with that id exists.");
+            System.exit(0);
+        }
+        File commitFile = join(OBJECTS_FOLDER, commitID);
+        Commit commit = readObject(commitFile, Commit.class);
+        if(!commit.fileBlobTable.containsKey(name)) {
+            System.out.println("File does not exist in that commit.");
+            System.exit(0);
+        }
+        writeBlobToCWD(commit, name);
+    }
+
+    private static void rebuildCWD(Commit targetCommit) {
+        List<String> cwdFiles = plainFilenamesIn(CWD);
+        Commit currentCommit = getHeadCommit();
+
+        for(String name : cwdFiles) {
+            if(!currentCommit.fileBlobTable.containsKey(name)) {
+                if(targetCommit.fileBlobTable.containsKey(name)) {
+                    System.out.println("There is an untracked file in the way; delete it, or add and commit it first.");
+                    System.exit(0);
+                }
+            }
+        }
+
+        for(String name : currentCommit.fileBlobTable.keySet()) {
+            if(!targetCommit.fileBlobTable.containsKey(name)) {
+                restrictedDelete(join(CWD, name));
+            }
+        }
+
+        for(String name : targetCommit.fileBlobTable.keySet()) {
+            writeBlobToCWD(targetCommit, name);
+        }
+
+        writeObject(STAGE_FILE, new Stage());
+    }
+
+    public static void checkoutBranch(String branchID) {
+        File targetBranchFile = join(HEADS_FOLDER, branchID);
+        if(!targetBranchFile.exists()) {
+            System.out.println("No such branch exists.");
+            System.exit(0);
+        }
+        if (branchID.equals(readContentsAsString(HEAD_FILE))) {
+            System.out.println("No need to checkout the current branch.");
+            System.exit(0);
+        }
+
+        String targetCommitID = readContentsAsString(targetBranchFile);
+        Commit targetCommit = Commit.fromFile(targetCommitID);
+
+        rebuildCWD(targetCommit);
+
+        writeContents(HEAD_FILE, branchID);
+    }
+
+    public static void remove(String name) {
+        Stage stage = readObject(STAGE_FILE, Stage.class);
+        Commit currentCommit = getHeadCommit();
+
+        boolean isStaged = stage.added.containsKey(name);
+        boolean isTracked = currentCommit.fileBlobTable.containsKey(name);
+
+        if(!isStaged && !isTracked) {
+            System.out.println("No reason to remove the file.");
+            System.exit(0);
+        }
+        if(isStaged) {
+            stage.added.remove(name);
+        }
+        if(isTracked) {
+            stage.removed.add(name);
+            restrictedDelete(join(CWD, name));
+        }
+
+        writeObject(STAGE_FILE, stage);
+    }
+
+    public static void status() {
+        System.out.println("=== Branches ===");
+        String currentBranch = readContentsAsString(HEAD_FILE);
+        List<String> branches = plainFilenamesIn(HEADS_FOLDER);
+        Collections.sort(branches);
+        for(String branchID : branches) {
+            if(branchID.equals(currentBranch)) {
+                System.out.println("*" + branchID);
+            } else {
+                System.out.println(branchID);
+            }
+        }
+        System.out.println();
+
+        Stage stage = readObject(STAGE_FILE, Stage.class);
+
+        System.out.println("=== Staged Files ===");
+        List<String> addedFiles = new ArrayList<>(stage.added.keySet());
+        Collections.sort(addedFiles);
+        for (String name : addedFiles) {
+            System.out.println(name);
+        }
+        System.out.println();
+
+        System.out.println("=== Removed Files ===");
+        List<String> removedFiles = new ArrayList<>(stage.removed);
+        Collections.sort(removedFiles);
+        for (String name : removedFiles) {
+            System.out.println(name);
+        }
+        System.out.println();
+
+        System.out.println("=== Modifications Not Staged For Commit ===");
+        System.out.println();
+        System.out.println("=== Untracked Files ===");
+        System.out.println();
+    }
+
+    public static void addBranch(String name) {
+        File newBranch = join(HEADS_FOLDER, name);
+
+        if(newBranch.exists()) {
+            System.out.println("A branch with that name already exists.");
+            System.exit(0);
+        }
+
+        writeContents(newBranch, getHeadCommitID());
+    }
+
+    public static void removeBranch(String name) {
+        File curBranch = join(HEADS_FOLDER, name);
+        if(!curBranch.exists()) {
+            System.out.println("A branch with that name does not exist.");
+            System.exit(0);
+        }
+        if(curBranch.equals(getHeadBranchFile())) {
+            System.out.println("Cannot remove the current branch.");
+            System.exit(0);
+        }
+
+        restrictedDelete(curBranch);
+    }
+
+    public static void globalLog() {
+        List<String> Objects = plainFilenamesIn(OBJECTS_FOLDER);
+        for(String name : Objects) {
+            try {
+                File commitFile = join(OBJECTS_FOLDER, name);
+                Commit commit = readObject(commitFile, Commit.class);
+
+                System.out.println("===");
+                System.out.println("commit " + name);
+                System.out.println("Date: " + commit.commitTime);
+                System.out.println(commit.logMessage);
+                System.out.println();
+            } catch(Exception e) {
+                continue;
+            }
+        }
+    }
+
+    public static void find(String targetMessage) {
+        List<String> Objects = plainFilenamesIn(OBJECTS_FOLDER);
+        boolean found = false;
+        for(String name : Objects) {
+            try {
+                File commitFile = join(OBJECTS_FOLDER, name);
+                Commit commit = readObject(commitFile, Commit.class);
+                if(commit.logMessage.equals(targetMessage)) {
+                    found = true;
+
+                    System.out.println(name);
+                }
+            } catch(Exception e) {
+                continue;
+            }
+        }
+        if(!found) {
+            System.out.println("Found no commit with that message.");
+            System.exit(0);
+        }
+    }
+
+    public static void reset(String targetCommitID) {
+        targetCommitID = getFullID(targetCommitID);
+        if(targetCommitID == null) {
+            System.out.println("No commit with that id exists.");
+            System.exit(0);
+        }
+
+        File targetCommitFile = join(OBJECTS_FOLDER, targetCommitID);
+        Commit targetCommit = readObject(targetCommitFile, Commit.class);
+
+        rebuildCWD(targetCommit);
+
+        String currentBranchID = readContentsAsString(HEAD_FILE);
+        File currentBranch = join(HEADS_FOLDER, currentBranchID);
+        writeContents(currentBranch, targetCommitID);
+    }
+
+    private static String processConflict(String name, String currentBlobID, String givenBlobID) {
+        String curContent = "";
+        if (currentBlobID != null) {
+            byte[] content = readContents(join(OBJECTS_FOLDER, currentBlobID));
+            curContent = new String(content, java.nio.charset.StandardCharsets.UTF_8);
+        }
+
+        String givenContent = "";
+        if (givenBlobID != null) {
+            byte[] content = readContents(join(OBJECTS_FOLDER, givenBlobID));
+            givenContent = new String(content, java.nio.charset.StandardCharsets.UTF_8);
+        }
+
+        String conflictText = "<<<<<<< HEAD\n"
+                            + curContent
+                            + "=======\n"
+                            + givenContent
+                            + ">>>>>>>\n";
+        writeContents(join(CWD, name), conflictText);
+
+        add(name);
+
+        byte[] content = readContents(join(CWD, name));
+        String blobID = sha1(content);
+        return blobID;
+    }
+
+    private static String findSplitCommitID(String currentCommitID, String givenCommitID) {
+        HashSet<String> ancestors = new HashSet<>();
+        Queue<String> q = new ArrayDeque<>();
+        q.add(currentCommitID);
+        while(!q.isEmpty()) {
+            String id = q.poll();
+            if(!ancestors.contains(id)) {
+                ancestors.add(id);
+                Commit c = Commit.fromFile(id);
+                if(c.parent != null) q.add(c.parent);
+                if(c.mergeParent != null) q.add(c.mergeParent);
+            }
+        }
+        HashSet<String> visited = new HashSet<>();
+        q.add(givenCommitID);
+        while(!q.isEmpty()) {
+            String id = q.poll();
+            if(ancestors.contains(id)) return id;
+            if(!visited.contains(id)) {
+                visited.add(id);
+                Commit c = Commit.fromFile(id);
+                if(c.parent != null) q.add(c.parent);
+                if(c.mergeParent != null) q.add(c.mergeParent);
+            }
+        }
+        return null;
+    }
+
+    private static void checkUntrackedFilesForMerge(Commit splitCommit, Commit givenCommit, Commit currentCommit) {
+        List<String> cwdFiles = plainFilenamesIn(CWD);
+        for(String name : cwdFiles) {
+            if(!currentCommit.fileBlobTable.containsKey(name)) {
+                String splitBlobID = splitCommit.fileBlobTable.get(name);
+                String givenBlobID = givenCommit.fileBlobTable.get(name);
+
+                if(!Objects.equals(splitBlobID, givenBlobID)) {
+                    System.out.println("There is an untracked file in the way; delete it, or add and commit it first.");
+                    System.exit(0);
+                }
+            }
+        }
+    }
+
+    public static void merge(String givenBranchID) {
+        if(!join(HEADS_FOLDER, givenBranchID).exists()) {
+            System.out.println("A branch with that name does not exist.");
+            System.exit(0);
+        }
+
+        String currentCommitID = getHeadCommitID();
+        String givenCommitID = getCommitID(givenBranchID);
+        String splitCommitID = findSplitCommitID(currentCommitID, givenCommitID);
+
+        Stage stage = readObject(STAGE_FILE, Stage.class);
+        if(!stage.added.isEmpty() || !stage.removed.isEmpty()) {
+            System.out.println("You have uncommitted changes.");
+            System.exit(0);
+        }
+
+        String currentBranchID = readContentsAsString(HEAD_FILE);
+        if(Objects.equals(currentBranchID, givenBranchID)) {
+            System.out.println("Cannot merge a branch with itself.");
+            System.exit(0);
+        }
+
+        checkUntrackedFilesForMerge(Commit.fromFile(splitCommitID), Commit.fromFile(givenCommitID), Commit.fromFile(currentCommitID));
+
+        if(Objects.equals(splitCommitID, givenCommitID)) {
+            System.out.println("Given branch is an ancestor of the current branch.");
+            System.exit(0);
+        }
+        if(Objects.equals(splitCommitID, currentCommitID)) {
+            rebuildCWD(Commit.fromFile(givenCommitID));
+            writeContents(getHeadBranchFile(), givenCommitID);
+
+            System.out.println("Current branch fast-forwarded.");
+            System.exit(0);
+        }
+
+        HashSet<String> files = new HashSet<>();
+        Commit splitCommit = Commit.fromFile(splitCommitID);
+        Commit currentCommit = Commit.fromFile(currentCommitID);
+        Commit givenCommit = Commit.fromFile(givenCommitID);
+        for(String name : splitCommit.fileBlobTable.keySet()) files.add(name);
+        for(String name : currentCommit.fileBlobTable.keySet()) files.add(name);
+        for(String name : givenCommit.fileBlobTable.keySet()) files.add(name);
+
+        Map<String, String> newFileTable = new HashMap<>(currentCommit.fileBlobTable);
+
+        boolean hasConflict = false;
+        for(String name : files) {
+            String splitBlobID = splitCommit.fileBlobTable.get(name);
+            String currentBlobID = currentCommit.fileBlobTable.get(name);
+            String givenBlobID = givenCommit.fileBlobTable.get(name);
+
+            if(Objects.equals(splitBlobID, currentBlobID) && !Objects.equals(splitBlobID, givenBlobID)) {
+                checkoutCommitFile(givenCommitID, name);
+
+                stage.added.put(name, givenBlobID);
+                stage.removed.remove(name);
+
+                newFileTable.put(name, givenBlobID);
+            } else if(!Objects.equals(splitBlobID, currentBlobID) && Objects.equals(splitBlobID, givenBlobID)) {
+                continue;
+            } else if(Objects.equals(currentBlobID, givenBlobID)) {
+                continue;
+            } else if(splitBlobID == null && currentBlobID != null) {
+                continue;
+            } else if(splitBlobID == null && currentBlobID == null && givenBlobID != null) {
+                checkoutCommitFile(givenCommitID, name);
+
+                stage.added.put(name, givenBlobID);
+                stage.removed.remove(name);
+                newFileTable.put(name, givenBlobID);
+            } else if(Objects.equals(splitBlobID, currentBlobID) && givenBlobID == null) {
+                restrictedDelete(join(CWD, name));
+                stage.added.remove(name);
+                stage.removed.add(name);
+                newFileTable.remove(name);
+            } else if(Objects.equals(splitBlobID, givenBlobID) && currentBlobID == null) {
+                continue;
+            } else {
+                String blobID = processConflict(name, currentBlobID, givenBlobID);
+                newFileTable.put(name, blobID);
+
+                hasConflict = true;
+            }
+        }
+
+        writeObject(STAGE_FILE, stage);
+        if(hasConflict) {
+            System.out.println("Encountered a merge conflict.");
+        }
+
+        String message = "Merged " + givenBranchID + " into " + currentBranchID + ".";
+
+        String timeStamp = formatDate(new Date());
+        Commit mergeCommit = new Commit(message, timeStamp, currentCommitID, givenCommitID, newFileTable);
+        String mergeCommitID = mergeCommit.saveCommit();
+
+        writeContents(getHeadBranchFile(), mergeCommitID);
+        writeObject(STAGE_FILE, new Stage());
     }
 }

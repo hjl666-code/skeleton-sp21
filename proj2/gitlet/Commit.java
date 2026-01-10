@@ -25,7 +25,7 @@ public class Commit implements Serializable {
 
     /** The message of this Commit. */
 
-    public String logMessage, commitTime, parentRef, parentMergeRef, SHA1ID;
+    public String logMessage, commitTime, parent, mergeParent;
 
     public Map<String, String> fileBlobTable;
 
@@ -33,10 +33,11 @@ public class Commit implements Serializable {
 
     /* TODO: fill in the rest of this class. */
 
-    public Commit(String message, String time, String parent, Map<String, String> blobs) {
+    public Commit(String message, String time, String parent, String mergeParent, Map<String, String> blobs) {
         this.logMessage = message;
         this.commitTime = time;
-        this.parentRef = parent;
+        this.parent = parent;
+        this.mergeParent = mergeParent;
         this.fileBlobTable = blobs;
     }
 
