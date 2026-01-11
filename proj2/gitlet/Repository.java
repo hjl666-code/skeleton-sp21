@@ -185,7 +185,7 @@ public class Repository {
 
     private static String getFullID(String shortID) {
         if (shortID.length() == 40) {
-            if(join(OBJECTS_FOLDER, shortID).exists()) {
+            if (join(OBJECTS_FOLDER, shortID).exists()) {
                 return shortID;
             } else {
                 return null;
@@ -280,6 +280,52 @@ public class Repository {
         writeObject(STAGE_FILE, stage);
     }
 
+    private static void printModifications(Commit headCommit, Stage stage, List<String> cwdFiles) {
+        List<String> modifications = new ArrayList<>();
+
+        for (String name : headCommit.fileBlobTable.keySet()) {
+            File file = join(CWD, name);
+            if (file.exists()) {
+                String blobID = sha1(readContents(file));
+                if (!Objects.equals(headCommit.fileBlobTable.get(name), blobID) && !stage.added.containsKey(name)) {
+                    modifications.add(name + " (modified)");
+                } else if (!stage.removed.contains(name)){
+                    modifications.add(name + " (deleted)");
+                }
+            }
+        }
+
+        for (String name : stage.added.keySet()) {
+            File file = join(CWD, name);
+            if (!file.exists()) {
+                modifications.add(name + " (deleted)");
+            } else {
+                String currentBlob = sha1(readContents(file));
+                if (!Objects.equals(currentBlob, stage.added.get(name))) {
+                    modifications.add(name + " (modified)");
+                }
+            }
+        }
+
+        Collections.sort(modifications);
+        for (String line : modifications) {
+            System.out.println(line);
+        }
+     }
+
+     private static void printUntracked(Commit headCommit, Stage stage, List<String> cwdFiles) {
+         List<String> untracked = new ArrayList<>();
+         for (String name : cwdFiles) {
+             if (!headCommit.fileBlobTable.containsKey(name) && !stage.added.containsKey(name)) {
+                 untracked.add(name);
+             }
+         }
+         Collections.sort(untracked);
+         for (String name : untracked) {
+             System.out.println(name);
+         }
+     }
+
     public static void status() {
         System.out.println("=== Branches ===");
         String currentBranch = readContentsAsString(HEAD_FILE);
@@ -311,10 +357,13 @@ public class Repository {
             System.out.println(name);
         }
         System.out.println();
-
-        System.out.println("=== Modif ications Not Staged For Commit ===");
+        Commit headCommit = getHeadCommit();
+        List<String> cwdFiles = plainFilenamesIn(CWD);
+        System.out.println("=== Modifications Not Staged For Commit ===");
+        printModifications(headCommit, stage, cwdFiles);
         System.out.println();
         System.out.println("=== Untracked Files ===");
+        printUntracked(headCommit, stage, cwdFiles);
         System.out.println();
     }
 
@@ -420,10 +469,9 @@ public class Repository {
                             + ">>>>>>>\n";
         writeContents(join(CWD, name), conflictText);
 
-        add(name);
-
         byte[] content = readContents(join(CWD, name));
         String blobID = sha1(content);
+        writeContents(join(OBJECTS_FOLDER, blobID), content);
         return blobID;
     }
 
@@ -533,7 +581,7 @@ public class Repository {
                 continue;
             } else if (Objects.equals(currentBlobID, givenBlobID)) {
                 continue;
-            } else if (splitBlobID == null && currentBlobID != null) {
+            } else if (splitBlobID == null && currentBlobID != null && givenBlobID == null) {
                 continue;
             } else if (splitBlobID == null && currentBlobID == null && givenBlobID != null) {
                 checkoutCommitFile(givenCommitID, name);
@@ -550,6 +598,8 @@ public class Repository {
                 continue;
             } else {
                 String blobID = processConflict(name, currentBlobID, givenBlobID);
+                stage.added.put(name, blobID);
+
                 newFileTable.put(name, blobID);
 
                 hasConflict = true;
@@ -559,6 +609,7 @@ public class Repository {
         writeObject(STAGE_FILE, stage);
         if (hasConflict) {
             System.out.println("Encountered a merge conflict.");
+            System.exit(0);
         }
 
         String message = "Merged " + givenBranchID + " into " + currentBranchID + ".";
